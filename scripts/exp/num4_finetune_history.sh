@@ -1,18 +1,18 @@
 BASE_MODEL=/home/jiyuheng/groot_n1
 DATASET=/home/jiyuheng/Isaac-GR00T/demo_data/G1_Dex3_grasp_apple_place_basket_push_forward
-EXP_NAME=num2_1_G1_Dex3_grasp_apple_place_basket_push_forward
+EXP_NAME=num4_history_G1_Dex3_grasp_apple_place_basket_push_forward
 OUTPUT_DIR=/home/jiyuheng/n1_ckpt/${EXP_NAME}
 ROBOT_CONFIG=baai_g1_dex3
 
 export http_proxy=http://192.168.0.3:1080
 export https_proxy=http://192.168.0.3:1080
 
-# export WANDB_BASE_URL=https://api.wandb.ai
-# export WANDB_PROJECT=GR00T-N1-Reproduction
-# export WANDB_API_KEY="327df07cca0b4918195078945539c819acc6ac97"
-# export WANDB_RUN_NAME=${EXP_NAME}-$(date +%Y-%m-%d-%H-%M-%S)
-# wandb login $WANDB_API_KEY
-export WANDB_MODE=offline
+export WANDB_BASE_URL=https://api.wandb.ai
+export WANDB_PROJECT=GR00T-N1-Reproduction
+export WANDB_API_KEY="327df07cca0b4918195078945539c819acc6ac97"
+export WANDB_RUN_NAME=${EXP_NAME}-$(date +%Y-%m-%d-%H-%M-%S)
+wandb login $WANDB_API_KEY
+# export WANDB_MODE=offline
 
 export NO_ALBUMENTATIONS_UPDATE=1
 

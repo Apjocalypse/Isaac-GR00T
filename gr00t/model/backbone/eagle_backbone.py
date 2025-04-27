@@ -108,7 +108,7 @@ class EagleBackbone(nn.Module):
         ):
             self.model.vision_model.vision_model.head = torch.nn.Identity()
 
-        # remove parts of the LLM
+        # remove parts of the LLM, choose 12th layer to get embed.
         self.model.language_model.lm_head = torch.nn.Identity()
         while len(self.model.language_model.model.layers) > select_layer:
             self.model.language_model.model.layers.pop(-1)

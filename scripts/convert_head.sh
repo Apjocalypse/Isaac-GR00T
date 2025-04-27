@@ -1,7 +1,7 @@
-DATA_DIR=/home/jiyuheng/Isaac-GR00T/demo_data/raw/G1_Dex3_bread
-ROBOT_TYPE=baai_G1_Dex3_3_camera
-TASK="Pick_up_the_bread_that_is_closer_to_the_cup_and_put_it_into_the_plate"
-REPO_ID=yuheng2000/Pick_up_the_bread_that_is_closer_to_the_cup_and_put_it_into_the_plate
+DATA_DIR=/home/jiyuheng/Isaac-GR00T/demo_data/raw/G1_Dex3_rabbit
+ROBOT_TYPE=baai_G1_Dex3_head_camera
+TASK="Pick_up_the_toy_and_put_it_into_the_plate"
+REPO_ID=yuheng2000/Pick_up_the_toy_and_put_it_into_the_plate
 CACHE_DIR=/root/.cache/huggingface/lerobot/$REPO_ID
 TARGET_DIR=/home/jiyuheng/Isaac-GR00T/demo_data
 

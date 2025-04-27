@@ -218,11 +218,16 @@ if __name__ == "__main__":
         else:
             # Multi-GPU mode - use torchrun
             script_path = Path(__file__).absolute()
-            # Remove any existing CUDA_VISIBLE_DEVICES from environment
-            if "CUDA_VISIBLE_DEVICES" in os.environ:
-                del os.environ["CUDA_VISIBLE_DEVICES"]
+
+            # # Remove any existing CUDA_VISIBLE_DEVICES from environment
+            # if "CUDA_VISIBLE_DEVICES" in os.environ:
+            #     del os.environ["CUDA_VISIBLE_DEVICES"]
 
             # Use subprocess.run instead of os.system
+            try:
+                print(f'os.environ["CUDA_VISIBLE_DEVICES"]:{os.environ["CUDA_VISIBLE_DEVICES"]}')
+            except:
+                pass
             cmd = [
                 "torchrun",
                 "--standalone",

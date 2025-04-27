@@ -1,15 +1,12 @@
 # conda activate /home/jiyuheng/env/gr00t/
 
 BASE_MODEL=/home/jiyuheng/groot_n1
-DATASET=/home/robot_data/pi0_data/agilex/HuaihaiLyu/groceries
-EXP_NAME=agi-1_agilex_groceries
+DATASET=/home/jiyuheng/Isaac-GR00T/demo_data/G1_Dex3_grasp_apple_place_basket_push_forward
+EXP_NAME=debug
 OUTPUT_DIR=/home/jiyuheng/n1_ckpt/${EXP_NAME}
-ROBOT_CONFIG=aloha
+ROBOT_CONFIG=baai_g1_dex3
 
 export NO_ALBUMENTATIONS_UPDATE=1
-
-export http_proxy=http://192.168.0.3:1080
-export https_proxy=http://192.168.0.3:1080
 export WANDB_MODE=offline
 
 TUNE_LLM="--no-tune-llm"
@@ -20,7 +17,7 @@ TUNE_DIFFUSION_MODEL="--tune-diffusion-model"
 MAX_STEP=5000
 NUM_GPU=1
 
-BATCHSIZE=16
+BATCHSIZE=2
 SAVE_STEP=500
 LR=0.0001
 WEIGHT_DECAY=1e-05
@@ -32,7 +29,7 @@ fi
 
 # CUDA_VISIBLE_DEVICES=7
 
-CUDA_VISIBLE_DEVICES=7 python /home/jiyuheng/Isaac-GR00T/scripts/gr00t_finetune.py \
+CUDA_VISIBLE_DEVICES=1 python /home/jiyuheng/Isaac-GR00T/scripts/gr00t_finetune.py \
     --data_config $ROBOT_CONFIG \
     --dataset-path $DATASET \
     --output-dir $OUTPUT_DIR \
