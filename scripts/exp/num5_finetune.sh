@@ -18,7 +18,7 @@ TUNE_VISUAL="--tune-visual"
 TUNE_PROJECTOR="--tune-projector"
 TUNE_DIFFUSION_MODEL="--tune-diffusion-model"
 
-MAX_STEP=50000
+MAX_STEP=100000
 NUM_GPU=4
 
 BATCHSIZE=16

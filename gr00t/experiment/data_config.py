@@ -1159,15 +1159,11 @@ class BAAI_AGILEX(BaseDataConfig):
     video_keys = ["video.cam_high", "video.cam_left_wrist", "video.cam_right_wrist"]
     state_keys = [
         "state.left_arm",
-        "state.left_gripper",
         "state.right_arm",
-        "state.right_gripper",
     ]
     action_keys = [
         "action.left_arm",
-        "action.left_gripper",
         "action.right_arm",
-        "action.right_gripper",
     ]
     language_keys = ["annotation.human.task_description"]
     observation_indices = [0]
