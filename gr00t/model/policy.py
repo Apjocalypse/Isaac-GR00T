@@ -70,8 +70,8 @@ class Gr00tPolicy(BasePolicy):
         modality_transform: ComposedModalityTransform,
         denoising_steps: Optional[int] = None,
         device: Union[int, str] = "cuda" if torch.cuda.is_available() else "cpu",
-        use_asyn: bool = False,
-        sample_rate: int = 4,
+        load_meta: bool = True,
+        action_dim: int = 16,
     ):
         """
         Initialize the Gr00tPolicy.
@@ -94,8 +94,6 @@ class Gr00tPolicy(BasePolicy):
                 f"Model not found or avail in the huggingface hub. Loading from local path: {model_path}"
             )
 
-        self.use_asyn = use_asyn
-        self.sample_rate = sample_rate
         self._modality_config = modality_config
         self._modality_transform = modality_transform
         self._modality_transform.eval()  # set this to eval mode
@@ -111,7 +109,8 @@ class Gr00tPolicy(BasePolicy):
         # Load model
         self._load_model(model_path)
         # Load transforms
-        self._load_metadata(self.model_path / "experiment_cfg")
+        if load_meta:
+            self._load_metadata(self.model_path / "experiment_cfg")
         # Load horizons
         self._load_horizons()
 
@@ -147,6 +146,9 @@ class Gr00tPolicy(BasePolicy):
         """
         return self._modality_transform.unapply(action)
 
+    def set_action_dim(self, action_dim: int):
+        self.model.action_dim = action_dim
+
     def get_action(self, observations: Dict[str, Any]) -> Dict[str, Any]:
         """
         Make a prediction with the model.
@@ -169,22 +171,22 @@ class Gr00tPolicy(BasePolicy):
         """
         # let the get_action handles both batch and single input
         is_batch = self._check_state_is_batched(observations)
-        if not is_batch:
-            observations = unsqueeze_dict_values(observations)
+        # if not is_batch:
+        #     observations = unsqueeze_dict_values(observations)
         # Apply transforms
         normalized_input = self.apply_transforms(observations)
 
         normalized_action = self._get_action_from_normalized_input(normalized_input)
         unnormalized_action = self._get_unnormalized_action(normalized_action)
 
-        if not is_batch:
-            unnormalized_action = squeeze_dict_values(unnormalized_action)
+        # if not is_batch:
+        #     unnormalized_action = squeeze_dict_values(unnormalized_action)
         return unnormalized_action
 
     def _get_action_from_normalized_input(self, normalized_input: Dict[str, Any]) -> torch.Tensor:
         # Set up autocast context if needed
         with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            model_pred = self.model.get_action(normalized_input, self.use_asyn, self.sample_rate)
+            model_pred = self.model.get_action(normalized_input)
 
         normalized_action = model_pred["action_pred"].float()
         return normalized_action
