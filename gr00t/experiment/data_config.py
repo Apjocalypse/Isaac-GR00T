@@ -26,7 +26,7 @@ from gr00t.data.transform.video import (
     VideoToNumpy,
     VideoToTensor,
 )
-from gr00t.model.transforms import GR00TTransform
+from gr00t.model.transforms import GR00TTransform, GenieTransform, SimTransform
 
 
 class BaseDataConfig(ABC):
@@ -834,52 +834,118 @@ class AgibotGenie1DataConfig:
 
     def transform(self):
         transforms = [
-            # video transforms
-            VideoToTensor(apply_to=self.video_keys),
-            VideoCrop(apply_to=self.video_keys, scale=0.95),
-            VideoResize(apply_to=self.video_keys, height=224, width=224, interpolation="linear"),
-            VideoColorJitter(
-                apply_to=self.video_keys,
-                brightness=0.3,
-                contrast=0.4,
-                saturation=0.5,
-                hue=0.08,
+            GenieTransform(
+                state_horizon=len(self.observation_indices),
+                action_horizon=len(self.action_indices),
+                max_state_dim=64,
+                max_action_dim=32,
             ),
-            VideoToNumpy(apply_to=self.video_keys),
-            # state transforms
-            StateActionToTensor(apply_to=self.state_keys),
-            StateActionTransform(
-                apply_to=self.state_keys,
-                normalization_modes={
-                    "state.left_arm_joint_position": "min_max",
-                    "state.right_arm_joint_position": "min_max",
-                    "state.left_effector_position": "min_max",
-                    "state.right_effector_position": "min_max",
-                    "state.head_position": "min_max",
-                    "state.waist_position": "min_max",
-                },
-            ),
-            # action transforms
-            StateActionToTensor(apply_to=self.action_keys),
-            StateActionTransform(
-                apply_to=self.action_keys,
-                normalization_modes={
-                    "action.left_arm_joint_position": "min_max",
-                    "action.right_arm_joint_position": "min_max",
-                    "action.left_effector_position": "min_max",
-                    "action.right_effector_position": "min_max",
-                    "action.head_position": "min_max",
-                    "action.waist_position": "min_max",
-                    "action.robot_velocity": "min_max",
-                },
-            ),
-            # concat transforms
-            ConcatTransform(
+        ]
+
+        return ComposedModalityTransform(transforms=transforms)
+    
+class AgibotGenieSimDataConfig:
+    video_keys = [
+        "/G1/head_link2/Head_Camera",
+        "/G1/gripper_l_base_link/Left_Camera",
+        "/G1/gripper_r_base_link/Right_Camera",
+    ]
+    state_keys = [
+        # "state.left_arm_joint_position",
+        # "state.right_arm_joint_position",
+        # "state.left_effector_position",
+        # "state.right_effector_position",
+        # "state.head_position",
+        # "state.waist_position",
+        "idx21_arm_l_joint1",
+        "idx22_arm_l_joint2",
+        "idx23_arm_l_joint3",
+        "idx24_arm_l_joint4",
+        "idx25_arm_l_joint5",
+        "idx26_arm_l_joint6",
+        "idx27_arm_l_joint7",
+        "idx61_arm_r_joint1",
+        "idx62_arm_r_joint2",
+        "idx63_arm_r_joint3",
+        "idx64_arm_r_joint4",
+        "idx65_arm_r_joint5",
+        "idx66_arm_r_joint6",
+        "idx67_arm_r_joint7",
+        "idx41_gripper_l_outer_joint1",
+        "idx81_gripper_r_outer_joint1",
+        # "idx11_head_joint1",
+        # "idx12_head_joint2",
+        # "idx02_body_joint2",
+        # "idx01_body_joint1",
+
+    ]
+    action_keys = [
+        'idx01_body_joint1', 
+        'idx02_body_joint2', 
+        'idx11_head_joint1', 
+        'idx12_head_joint2', 
+        'idx21_arm_l_joint1', 
+        'idx61_arm_r_joint1', 
+        'idx22_arm_l_joint2', 
+        'idx62_arm_r_joint2', 
+        'idx23_arm_l_joint3', 
+        'idx63_arm_r_joint3', 
+        'idx24_arm_l_joint4', 
+        'idx64_arm_r_joint4', 
+        'idx25_arm_l_joint5', 
+        'idx65_arm_r_joint5', 
+        'idx26_arm_l_joint6', 
+        'idx66_arm_r_joint6', 
+        'idx27_arm_l_joint7', 
+        'idx67_arm_r_joint7', 
+        'idx31_gripper_l_inner_joint1', 
+        'idx41_gripper_l_outer_joint1', 
+        'idx71_gripper_r_inner_joint1', 
+        'idx81_gripper_r_outer_joint1', 
+        'idx32_gripper_l_inner_joint3', 
+        'idx42_gripper_l_outer_joint3', 
+        'idx72_gripper_r_inner_joint3', 
+        'idx82_gripper_r_outer_joint3', 
+        'idx33_gripper_l_inner_joint4', 
+        'idx43_gripper_l_outer_joint4', 
+        'idx73_gripper_r_inner_joint4', 
+        'idx83_gripper_r_outer_joint4', 
+        'idx54_gripper_l_inner_joint0', 
+        'idx53_gripper_l_outer_joint0', 
+        'idx94_gripper_r_inner_joint0', 
+        'idx93_gripper_r_outer_joint0'
+    ]
+    observation_indices = [0]
+    action_indices = list(range(16))
+
+    def modality_config(self):
+        video_modality = ModalityConfig(
+            delta_indices=self.observation_indices,
+            modality_keys=self.video_keys,
+        )
+        state_modality = ModalityConfig(
+            delta_indices=self.observation_indices,
+            modality_keys=self.state_keys,
+        )
+        action_modality = ModalityConfig(
+            delta_indices=self.action_indices,
+            modality_keys=self.action_keys,
+        )
+        modality_configs = {
+            "video": video_modality,
+            "state": state_modality,
+            "action": action_modality,
+        }
+        return modality_configs
+
+    def transform(self):
+        transforms = [
+            SimTransform(
                 video_concat_order=self.video_keys,
                 state_concat_order=self.state_keys,
                 action_concat_order=self.action_keys,
             ),
-            GR00TTransform(
+            GenieTransform(
                 state_horizon=len(self.observation_indices),
                 action_horizon=len(self.action_indices),
                 max_state_dim=64,
@@ -905,4 +971,5 @@ DATA_CONFIG_MAP = {
     "unitree_g1_full_body": UnitreeG1FullBodyDataConfig(),
     "oxe_droid": OxeDroidDataConfig(),
     "agibot_genie1": AgibotGenie1DataConfig(),
+    "agibot_genie_sim": AgibotGenieSimDataConfig(),
 }

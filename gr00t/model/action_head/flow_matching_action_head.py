@@ -259,6 +259,8 @@ class FlowmatchingActionHead(nn.Module):
         return (self.config.noise_s - sample) / self.config.noise_s
 
     def prepare_input(self, batch: dict) -> BatchFeature:
+        # if "state" in batch and not torch.is_tensor(batch["state"]):
+        #     batch["state"] = torch.from_numpy(batch["state"])
         return BatchFeature(data=batch)
 
     def process_backbone_output(self, backbone_output: BatchFeature) -> BatchFeature:
@@ -294,8 +296,7 @@ class FlowmatchingActionHead(nn.Module):
                 action_input[k] = expanded
 
         # Get vision and language embeddings.
-        vl_embeds = backbone_output.backbone_features # bs,seq,dim
-        cur_vision_features = backbone_output.cur_vision_features # bs,seq,dim
+        vl_embeds = backbone_output.backbone_features
         device = vl_embeds.device
 
         # Get embodiment ID.
@@ -315,7 +316,7 @@ class FlowmatchingActionHead(nn.Module):
 
         # Convert (continuous) t -> discrete if needed
         t_discretized = (t[:, 0, 0] * self.num_timestep_buckets).long()
-        action_features = self.action_encoder(noisy_trajectory, t_discretized, embodiment_id) # bs*trunk*dim
+        action_features = self.action_encoder(noisy_trajectory, t_discretized, embodiment_id)
 
         # Maybe add position embedding.
         if self.config.add_pos_embed:
@@ -325,10 +326,9 @@ class FlowmatchingActionHead(nn.Module):
 
         # Join vision, language, state and action embedding along sequence dimension.
         sa_embs = torch.cat((state_features, action_features), dim=1)
-        vl_embs = torch.cat((vl_embeds, cur_vision_features), dim=1)  # bs,seq1+seq2,dim
+        vl_embs = vl_embeds
         vl_attn_mask = backbone_output.backbone_attention_mask
 
-        # feature fusion via DiT, vlm_output:(bs,seq1,dim) + state-action_output:(bs,seq2,dim) -> bs,seq2,dim_dit
         model_output = self.model(
             hidden_states=sa_embs,
             encoder_hidden_states=vl_embs,
@@ -336,11 +336,10 @@ class FlowmatchingActionHead(nn.Module):
             timestep=t_discretized,
             return_all_hidden_states=False,  # NOTE (YL): not using flare now
         )
-        # pass model_output to MLP, pred:(bs,17,action_dim)
         pred = self.action_decoder(model_output, embodiment_id)
         pred_actions = pred[:, -actions.shape[1] :]
 
-        # Slice out only the action portion of pred and target. 计算输出的At+1和At-noisy之间的MSE
+        # Slice out only the action portion of pred and target.
         action_mask = action_input.action_mask
         loss = F.mse_loss(pred_actions, velocity, reduction="none") * action_mask
         loss = loss.sum() / action_mask.sum()

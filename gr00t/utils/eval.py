@@ -15,6 +15,9 @@
 
 import matplotlib.pyplot as plt
 import numpy as np
+from PIL import Image
+import tqdm
+import os
 
 from gr00t.data.dataset import LeRobotSingleDataset
 from gr00t.model.policy import BasePolicy
@@ -125,5 +128,118 @@ def calc_mse_for_single_trajectory(
 
         plt.tight_layout()
         plt.show()
+
+    return mse
+
+def calc_mse_for_single_trajectory_genie(
+    policy,
+    dataset,
+    cfg,
+    traj_id: int,
+    steps=300,
+    action_horizon=30,
+    action_dim=16,
+    plot=False,
+):
+    state_joints_across_time = []
+    gt_action_joints_across_time = []
+    pred_action_joints_across_time = []
+
+    length = len(dataset.data)
+    steps = min(steps, length)
+
+    for step in tqdm.tqdm(range(steps)):
+
+        data_point = dataset.get_step_data(step)
+
+        # 打开图像文件
+        # try:
+        #     img_h = Image.open(os.path.join(dataset.data[step]["episode_dir"], "camera", str(step), "head_color.jpg"))
+        #     img_l = Image.open(os.path.join(dataset.data[step]["episode_dir"], "camera", str(step), "hand_left_color.jpg"))
+        #     img_r = Image.open(os.path.join(dataset.data[step]["episode_dir"], "camera", str(step), "hand_right_color.jpg"))
+        # except:
+        #     continue
+
+        # lang = dataset.data[step]["detailed_job_description"]
+
+        # lang = "Pick up the brown plum juice from the restock box with the right arm.;Place the brown plum juice on the shelf where the brown plum juice is located with the right arm."
+        
+        # 将图像转换为numpy数组
+        # img_h = np.array(data_point['init_cam_tensor_head_color'])
+        # img_l = np.array(data_point['init_cam_tensor_hand_left_color'])
+        # img_r = np.array(data_point['init_cam_tensor_hand_right_color'])
+
+        state = data_point["state"][0]
+        gt_action = data_point["action"][0]
+
+        state_joints_across_time.append(state)
+        gt_action_joints_across_time.append(gt_action)
+
+
+        if step % action_horizon == 0:
+            print("inferencing at step: ", step)
+            action_chunk = policy.get_action(data_point)['action'][0]
+            for j in range(action_horizon):
+                # NOTE: concat_pred_action = action[f"action.{modality_keys[0]}"][j]
+                # the np.atleast_1d is to ensure the action is a 1D array, handle where single value is returned
+                concat_pred_action = np.concatenate(
+                    [np.atleast_1d(action_chunk[j][:action_dim])],
+                    axis=0,
+                )
+                pred_action_joints_across_time.append(concat_pred_action)
+
+        # import ipdb;ipdb.set_trace()
+        # if cfg.with_proprio:
+        #     action = policy.step(img_h, img_l, img_r, lang, state)
+        # else:
+        #     action = policy.step(img_h, img_l, img_r, lang)
+        
+        # import ipdb;ipdb.set_trace()
+        # concat_pred_action = action
+        # pred_action_joints_across_time.append(concat_pred_action)
+
+    # plot the joints
+    state_joints_across_time = np.array(state_joints_across_time)
+    gt_action_joints_across_time = np.array(gt_action_joints_across_time)
+    pred_action_joints_across_time = np.array(pred_action_joints_across_time)[:steps]
+    assert (
+        state_joints_across_time.shape
+        == gt_action_joints_across_time.shape
+        == pred_action_joints_across_time.shape
+    )
+
+    # calc MSE across time
+    mse = np.mean((gt_action_joints_across_time - pred_action_joints_across_time) ** 2)
+    print("Unnormalized Action MSE across single traj:", mse)
+
+    num_of_joints = state_joints_across_time.shape[1]
+
+    if plot:
+        fig, axes = plt.subplots(nrows=num_of_joints, ncols=1, figsize=(8, 4 * num_of_joints))
+
+        # Add a global title showing the modality keys
+        fig.suptitle(
+            f"Trajectory {traj_id}",
+            fontsize=16,
+            color="blue",
+        )
+
+        for i, ax in enumerate(axes):
+            # ax.plot(state_joints_across_time[:, i], label="state joints")
+            ax.plot(gt_action_joints_across_time[:, i], label="gt action joints")
+            ax.plot(pred_action_joints_across_time[:, i], label="pred action joints")
+
+            # put a dot every ACTION_HORIZON
+            for j in range(0, steps, action_horizon):
+                if j == 0:
+                    ax.plot(j, gt_action_joints_across_time[j, i], "ro", label="inference point")
+                else:
+                    ax.plot(j, gt_action_joints_across_time[j, i], "ro")
+
+            ax.set_title(f"Joint {i}")
+            ax.legend()
+
+        plt.tight_layout()
+        plt.savefig(cfg.save_path)
 
     return mse
