@@ -302,14 +302,14 @@ class FlowmatchingActionHead(nn.Module):
         # Get embodiment ID.
         embodiment_id = action_input.embodiment_id
 
-        # Embed state. 将bs*1*dof的state编码为bs*1*dim
+        # Embed state.
         state_features = self.state_encoder(action_input.state, embodiment_id)
 
         # Embed noised action trajectory.
-        actions = action_input.action # bs*action_chunk*dof
+        actions = action_input.action
         noise = torch.randn(actions.shape, device=actions.device, dtype=actions.dtype)
         t = self.sample_time(actions.shape[0], device=actions.device, dtype=actions.dtype)
-        t = t[:, None, None]  # shape (bs,1,1) for broadcast
+        t = t[:, None, None]  # shape (B,1,1) for broadcast
 
         noisy_trajectory = (1 - t) * noise + t * actions
         velocity = actions - noise
