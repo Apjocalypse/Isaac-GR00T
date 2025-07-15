@@ -21,9 +21,11 @@ from transformers.feature_extraction_utils import BatchFeature
 
 import gr00t
 
-DEFAULT_EAGLE_PATH = os.path.join(
-    os.path.dirname(gr00t.__file__), "model", "backbone", "eagle2_hg_model"
-)
+# DEFAULT_EAGLE_PATH = os.path.join(
+#     os.path.dirname(gr00t.__file__), "model", "backbone", "eagle2_hg_model"
+# )
+
+DEFAULT_EAGLE_PATH = '/root/workspace/main/Isaac-GR00T-challenge/gr00t/model/backbone/eagle2_hg_model'
 
 
 class EagleBackbone(nn.Module):

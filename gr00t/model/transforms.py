@@ -15,6 +15,7 @@
 
 import random
 import re
+import cv2
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -94,10 +95,7 @@ def collate(features: List[dict], eagle_processor) -> dict:
             # Stack to form the batch dimension.
             # for i, arr in enumerate(values):
             #     print(f"{key} 数组 {i} 的形状: {arr.shape}")
-            if len(values) == 1:
-                batch[key] = values[0]
-            else:
-                batch[key] = torch.from_numpy(np.stack(values))
+            batch[key] = torch.from_numpy(np.stack(values))
     return batch
 
 def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_size):
@@ -252,13 +250,13 @@ class GenieTransform(InvertibleModalityTransform):
                 grouped_keys[modality] = []
             grouped_keys[modality].append(key)
         # Use video key to determine batch size.
-        video_ndim = data["action"].ndim
+        video_ndim = data["state"].ndim
         if video_ndim == 2:  # Interpret as [T, V, H, W, C]
             is_batched = False
             batch_size = 1
         elif video_ndim == 3:  # Interpret as [B, T, V, H, W, C]
             is_batched = True
-            batch_size = data["action"].shape[0]
+            batch_size = data["state"].shape[0]
         else:
             raise ValueError(f"Unsupported action number of dimensions: {video_ndim}")
 
@@ -353,8 +351,10 @@ class GenieTransform(InvertibleModalityTransform):
         for k, v in vlm_outputs.items():
             assert k not in transformed_data, f"Key {k} already exists in transformed_data."
             transformed_data[k] = v
-
-        self.embodiment_tag = EmbodimentTag("agibot_genie1")
+        if self.training:
+            self.embodiment_tag = EmbodimentTag("agibot_genie1")
+        else:
+            self.embodiment_tag = EmbodimentTag("agibot_genie_sim")
         transformed_data["embodiment_id"] = self.embodiment_tag_mapping[self.embodiment_tag.value]
 
         if self.training:
@@ -387,6 +387,111 @@ class GenieTransform(InvertibleModalityTransform):
     def __call__(self, data: dict) -> dict:
         return self.apply(data)
 
+
+class DefaultDataCollator(DataCollatorMixin):
+    def __init__(self, eagle_path: str = DEFAULT_EAGLE_PATH):
+        super().__init__()
+        self.eagle_processor = build_eagle_processor(eagle_path)
+
+    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
+        return collate(features, self.eagle_processor)
+
+class SimTransform(InvertibleModalityTransform):
+    apply_to: list[str] = Field(
+        default_factory=list, description="Not used in this transform, kept for compatibility."
+    )
+
+    video_concat_order: list[str] = Field(
+        ...,
+        description="Concatenation order for each video modality. "
+        "Format: ['video.ego_view_pad_res224_freq20', ...]",
+    )
+
+    state_concat_order: Optional[list[str]] = Field(
+        default=None,
+        description="Concatenation order for each state modality. "
+        "Format: ['state.position', 'state.velocity', ...].",
+    )
+
+    action_concat_order: Optional[list[str]] = Field(
+        default=None,
+        description="Concatenation order for each action modality. "
+        "Format: ['action.position', 'action.velocity', ...].",
+    )
+
+    render_depth: bool = False
+
+    action_dims: dict[str, int] = Field(
+        default_factory=dict,
+        description="The dimensions of the action keys.",
+    )
+    state_dims: dict[str, int] = Field(
+        default_factory=dict,
+        description="The dimensions of the state keys.",
+    )
+    def apply(self, data: dict) -> dict:
+        if "camera" in data:
+            # Check if keys in video_concat_order, state_concat_order, action_concat_order are
+            # ineed contained in the data. If not, then the keys are misspecified
+            video_keys = data["camera"]
+            assert self.video_concat_order is not None, f"{self.video_concat_order=}, {video_keys=}"
+            assert all(
+                item in video_keys for item in self.video_concat_order
+            ), f"keys in video_concat_order are misspecified, \n{video_keys=}, \n{self.video_concat_order=}"
+
+            # Process each video view
+            unsqueezed_videos = []
+            for video_key in self.video_concat_order:
+                video_data = video_keys.pop(video_key)
+                rgb_data = video_data['rgb_camera'].reshape(video_data['camera_info']['height'], video_data['camera_info']['width'], 4)
+                rgb_data = rgb_data[:, :, :3]
+                resized_image = cv2.resize(rgb_data, (224, 224), interpolation=cv2.INTER_LINEAR)
+                unsqueezed_video = np.expand_dims(
+                    resized_image, axis=-4
+                )  # [..., H, W, C] -> [..., 1, H, W, C]
+                unsqueezed_videos.append(unsqueezed_video)
+            # Concatenate along the new axis
+            unsqueezed_video = np.concatenate(unsqueezed_videos, axis=-4)  # [..., V, H, W, C]
+            del data["camera"]
+            # Video
+            data["videos"] = unsqueezed_video
+
+        # "state"
+        if "joint" in data:
+            state_keys = data["joint"]
+            assert self.state_concat_order is not None, f"{self.state_concat_order=}"
+            assert all(
+                item in state_keys for item in self.state_concat_order
+            ), f"keys in state_concat_order are misspecified, \n{state_keys=}, \n{self.state_concat_order=}"
+            # Concatenate the state keys
+            # We'll have StateActionToTensor before this transform, so here we use torch.cat
+            data["state"] = torch.tensor(
+                [data['joint'].pop(key) for key in self.state_concat_order]
+            ).unsqueeze(0)  # [T, D_state]
+            del data["joint"]
+        del data['pose']
+        del data['gripper']
+        return data
+    
+    def unapply(self, data: dict) -> dict:
+        assert "action" in data, f"{data.keys()=}"
+        # For those dataset without actions (LAPA), we'll never run unapply
+        assert self.action_concat_order is not None, f"{self.action_concat_order=}"
+        action_tensor = data.pop("action").squeeze(0)
+        action_chunk = []
+        for chunk in action_tensor:
+            action = []
+            for key in self.action_concat_order:
+                if key in self.joint_concat_order:
+                    index = self.joint_concat_order.index(key)
+                    action.append(chunk[index].item())
+                else:
+                    action.append(None)
+            action_chunk.append(action)
+        return action_chunk
+
+    def __call__(self, data: dict) -> dict:
+        return self.apply(data)
 
 class DefaultDataCollator(DataCollatorMixin):
     def __init__(self, eagle_path: str = DEFAULT_EAGLE_PATH):

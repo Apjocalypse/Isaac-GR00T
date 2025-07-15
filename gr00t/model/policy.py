@@ -29,8 +29,13 @@ from gr00t.data.schema import DatasetMetadata
 from gr00t.data.transform.base import ComposedModalityTransform
 from gr00t.model.gr00t_n1 import GR00T_N1_5
 
-COMPUTE_DTYPE = torch.bfloat16
+import os
+import rclpy
+import threading
 
+
+COMPUTE_DTYPE = torch.bfloat16
+ROOT_DIR = os.environ.get("SIM_REPO_ROOT")
 
 class BasePolicy(ABC):
     @abstractmethod
@@ -72,6 +77,7 @@ class Gr00tPolicy(BasePolicy):
         device: Union[int, str] = "cuda" if torch.cuda.is_available() else "cpu",
         load_meta: bool = True,
         action_dim: int = 16,
+        task_name: str = None,
     ):
         """
         Initialize the Gr00tPolicy.
@@ -99,6 +105,29 @@ class Gr00tPolicy(BasePolicy):
         self._modality_transform.eval()  # set this to eval mode
         self.model_path = Path(model_path)
         self.device = device
+        if task_name is not None:
+            from base_utils.ros_utils import SimROSNode
+            self.task_name = " ".join(task_name.split('_')[1:])
+            rclpy.init()
+            # load robot_cfg
+            with open(
+                os.path.join(ROOT_DIR, "benchmark/ader/eval_tasks", f"{task_name}.json"),
+                "r",
+            ) as f:
+                task_content = json.load(f)
+            self.robot_cfg_file = task_content["robot"]["robot_cfg"]
+            with open(
+                os.path.join(
+                    ROOT_DIR, "server/source/genie.sim.lab/robot_cfg/", self.robot_cfg_file
+                ),
+                "r",
+            ) as f:
+                self.robot_cfg = json.load(f)
+            self.sim_ros_node = SimROSNode(robot_cfg=self.robot_cfg)
+            self.spin_thread = threading.Thread(
+                target=rclpy.spin, args=(self.sim_ros_node,)
+            )
+            self.spin_thread.start()
 
         # Convert string embodiment tag to EmbodimentTag enum if needed
         if isinstance(embodiment_tag, str):
@@ -181,6 +210,15 @@ class Gr00tPolicy(BasePolicy):
 
         # if not is_batch:
         #     unnormalized_action = squeeze_dict_values(unnormalized_action)
+        return unnormalized_action
+    
+    def act(self, observation: Dict[str, Any], step_num: int):
+        # while self.sim_ros_node.buffer_empty():
+        #     time.sleep(0.1)
+        observation['text'] = self.task_name
+        normalized_input = self.apply_transforms(observation)
+        normalized_action = self._get_action_from_normalized_input(normalized_input)
+        unnormalized_action = self._get_unnormalized_action(normalized_action)
         return unnormalized_action
 
     def _get_action_from_normalized_input(self, normalized_input: Dict[str, Any]) -> torch.Tensor:
@@ -291,7 +329,52 @@ class Gr00tPolicy(BasePolicy):
             # And the step is positive
             assert (delta_indices[1] - delta_indices[0]) > 0, f"{delta_indices=}"
 
+    def reset(self):
+        target_position = [
+            0.34906611,
+            0.34987221,
+            0,
+            0.436332313,
+            -0.66857928,
+            0.67156327,
+            0.2008844,
+            -0.20287371,
+            0.27921745,
+            -0.282218840,
+            -1.28203404,
+            1.28208637,
+            0.84163094,
+            -0.84068865,
+            1.51518357,
+            -1.51710308,
+            -0.18715125,
+            0.18636601,
+            1,
+            -1,
+            1,
+            -1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+        ]
+        return target_position
 
+    def shutdown(self):
+        if rclpy.ok():
+            self.sim_ros_node.destroy_node()
+            rclpy.shutdown()
+
+        if self.spin_thread.is_alive():
+            self.spin_thread.join(timeout=5)
 #######################################################################################################
 
 

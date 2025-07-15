@@ -451,7 +451,6 @@ class A2dDataset(BaseDataset):
 
         return self.transforms(self.get_step_data(idx))
 
-
 class LAMStage1Dataset(BaseDataset):
     def __init__(self, is_train=True, image_size=448, pad2square=False, normalize_type="imagenet", **kwargs):
         super().__init__(**kwargs)

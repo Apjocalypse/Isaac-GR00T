@@ -259,6 +259,8 @@ class FlowmatchingActionHead(nn.Module):
         return (self.config.noise_s - sample) / self.config.noise_s
 
     def prepare_input(self, batch: dict) -> BatchFeature:
+        # if "state" in batch and not torch.is_tensor(batch["state"]):
+        #     batch["state"] = torch.from_numpy(batch["state"])
         return BatchFeature(data=batch)
 
     def process_backbone_output(self, backbone_output: BatchFeature) -> BatchFeature:

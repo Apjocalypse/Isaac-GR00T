@@ -124,7 +124,7 @@ def get_policy(args: ArgsConfig):
             modality_transform=modality_transform,
             embodiment_tag=args.embodiment_tag,
             device="cuda" if torch.cuda.is_available() else "cpu",
-            load_meta=args.load_meta
+            load_meta=args.load_meta,
         )
     else:
         policy: BasePolicy = RobotInferenceClient(host=args.host, port=args.port)
@@ -132,18 +132,11 @@ def get_policy(args: ArgsConfig):
     os.makedirs(args.local_log_dir, exist_ok=True)
     # policy.set_action_dim(args.action_dim)
 
-    val_set = {}
-    val_set[args.dataset_name] = {
-        "use_cam_list": ["head", "hand_right", "hand_left"],
-        "label_file_name": f"val.json",
-    }
-
     # Load gensim dataset
     from gr00t.data.agibot_dataset import A2dDataset
     dataset_args = a2d_cfg.DatasetArguments(
         meta_json_dir=args.dataset_root_dir,
         data_root_dir=args.dataset_root_dir,
-        dataset_task_cfg=val_set
     )
     data_training_args = a2d_cfg.DataTrainingArguments(force_image_size=224)
     ActionSpacePadder = a2d_cfg.ActionSpacePadderArguments()
@@ -155,18 +148,19 @@ def get_policy(args: ArgsConfig):
     )
 
     text_tokenizer.model_max_length = 4096
+    embodiment_tag = EmbodimentTag(args.embodiment_tag)
 
     vla_dataset = A2dDataset(
         # base parmas
         label_file_dir=dataset_args.meta_json_dir, 
         data_root_dir=dataset_args.data_root_dir, 
-        valid_episode_txt=dataset_args.valid_episode_txt, 
+        # valid_episode_txt=dataset_args.valid_episode_txt, 
         sample_rate=dataset_args.train_sample_rate, 
         online_process_mp_cnt=dataset_args.online_process_mp_cnt, 
         # a2d params
         text_tokenizer=text_tokenizer, 
         num_image_token=int((dataset_args.force_image_size // 14) ** 2 * (0.5**2)), 
-        is_train=True, 
+        is_train=False, 
         image_size=data_training_args.force_image_size, 
         pad2square=data_training_args.pad2square, 
         dynamic_image_size=data_training_args.dynamic_image_size, 
@@ -184,13 +178,13 @@ def get_policy(args: ArgsConfig):
         min_window_size=args.window_size, 
         max_window_size=args.window_size + 1, 
         # image_transform=image_processor.apply_transform, 
-        embodiment_tag=EmbodimentTag(args.embodiment_tag),
+        embodiment_tag=embodiment_tag,
         transforms=transforms,
         # modality_configs=modality_configs
     )
 
     vla_dataset.generate_task_infos(
-        dataset_args.dataset_task_cfg,
+        # dataset_args.dataset_task_cfg,
         task_episode_processors_cfg=dataset_args.episode_processors,
         task_dataset_processors_cfg=dataset_args.dataset_processors,
         task_runtime_processors_cfg=dataset_args.runtime_processors,
