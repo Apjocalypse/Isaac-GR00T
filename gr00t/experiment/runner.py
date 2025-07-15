@@ -21,6 +21,7 @@ import torch
 from transformers import TrainingArguments, set_seed
 
 from gr00t.data.dataset import LeRobotMixtureDataset, LeRobotSingleDataset
+from gr00t.data.agibot_dataset import A2dDataset
 from gr00t.experiment.trainer import DualBrainTrainer
 from gr00t.model.gr00t_n1 import GR00T_N1_5
 from gr00t.model.transforms import DefaultDataCollator
@@ -85,6 +86,8 @@ class TrainRunner:
                         for tag, metadata in train_dataset.merged_metadata.items()
                     }
                 )
+            elif isinstance(train_dataset, A2dDataset):
+                pass
             else:
                 raise ValueError(f"Invalid dataset type: {type(train_dataset)}")
             with open(self.exp_cfg_dir / "metadata.json", "w") as f:

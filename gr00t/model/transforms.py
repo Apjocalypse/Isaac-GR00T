@@ -32,6 +32,7 @@ from gr00t.data.schema import DatasetMetadata
 from gr00t.data.transform.base import InvertibleModalityTransform
 
 from .backbone.eagle_backbone import DEFAULT_EAGLE_PATH
+# from gr00t.model.backbone.eagle2_hg_model.inference_eagle_repo import EagleProcessor
 
 
 def formalize_language(language: str) -> str:
@@ -76,11 +77,315 @@ def collate(features: List[dict], eagle_processor) -> dict:
         elif key in ("pixel_values", "image_grid_thw", "attention_mask", "input_ids"):
             # Concat in existing batch dimension.
             batch[key] = torch.cat(values)
+        elif key in ('eagle_input_ids', 'eagle_attention_mask'):
+            max_columns = max(arr.shape[1] for arr in values)
+
+            # 填充到相同形状
+            padded_values = [torch.from_numpy(np.pad(arr, ((0, 0), (0, max_columns - arr.shape[1])), mode='constant')) for arr in values]
+
+            # # 打印填充后的数组形状
+            # for i, arr in enumerate(padded_values):
+            #     print(f"填充后的数组 {i}: shape={arr.shape}")
+
+            # 堆叠数组
+            batch[key] = torch.cat(padded_values)
         else:
             # state, state_mask, action and action_mask.
             # Stack to form the batch dimension.
-            batch[key] = torch.from_numpy(np.stack(values))
+            # for i, arr in enumerate(values):
+            #     print(f"{key} 数组 {i} 的形状: {arr.shape}")
+            if len(values) == 1:
+                batch[key] = values[0]
+            else:
+                batch[key] = torch.from_numpy(np.stack(values))
     return batch
+
+def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_size):
+    best_ratio_diff = float('inf')
+    best_ratio = (1, 1)
+    area = width * height
+    for ratio in target_ratios:
+        target_aspect_ratio = ratio[0] / ratio[1]
+        ratio_diff = abs(aspect_ratio - target_aspect_ratio)
+        if ratio_diff < best_ratio_diff:
+            best_ratio_diff = ratio_diff
+            best_ratio = ratio
+        elif ratio_diff == best_ratio_diff:
+            if area > 0.5 * image_size * image_size * ratio[0] * ratio[1]:
+                best_ratio = ratio
+    # print(f'width: {width}, height: {height}, best_ratio: {best_ratio}')
+    return best_ratio
+
+def dynamic_preprocess(image, min_num=1, max_num=6, image_size=448, use_thumbnail=False):
+    orig_width, orig_height = image.size
+    aspect_ratio = orig_width / orig_height
+
+    # calculate the existing image aspect ratio
+    target_ratios = set(
+        (i, j) for n in range(min_num, max_num + 1) for i in range(1, n + 1) for j in range(1, n + 1) if
+        i * j <= max_num and i * j >= min_num)
+    target_ratios = sorted(target_ratios, key=lambda x: x[0] * x[1])
+
+    # find the closest aspect ratio to the target
+    target_aspect_ratio = find_closest_aspect_ratio(
+        aspect_ratio, target_ratios, orig_width, orig_height, image_size)
+
+    # calculate the target width and height
+    target_width = image_size * target_aspect_ratio[0]
+    target_height = image_size * target_aspect_ratio[1]
+    blocks = target_aspect_ratio[0] * target_aspect_ratio[1]
+
+    # resize the image
+    resized_img = image.resize((target_width, target_height))
+    processed_images = []
+    for i in range(blocks):
+        box = (
+            (i % (target_width // image_size)) * image_size,
+            (i // (target_width // image_size)) * image_size,
+            ((i % (target_width // image_size)) + 1) * image_size,
+            ((i // (target_width // image_size)) + 1) * image_size
+        )
+        # split the image
+        split_img = resized_img.crop(box)
+        processed_images.append(split_img)
+    assert len(processed_images) == blocks
+    if use_thumbnail and len(processed_images) != 1:
+        thumbnail_img = image.resize((image_size, image_size))
+        processed_images.append(thumbnail_img)
+    return processed_images
+
+class GenieTransform(InvertibleModalityTransform):
+    apply_to: list[str] = Field(
+        default_factory=list, description="Not used in this transform, kept for compatibility."
+    )
+    dynamic_image_size: bool = False
+    image_size: int = 224
+    min_dynamic_patch: int = 1
+    max_dynamic_patch: int = 6
+    use_thumbnail: bool = False
+    training: bool = True
+    eagle_processor: ProcessorMixin = Field(default=build_eagle_processor(DEFAULT_EAGLE_PATH))
+    # vlm_processor: EagleProcessor = Field(default=EagleProcessor())
+    cam_keys: List =[
+                        "init_cam_tensor_head_color", 
+                        "init_cam_tensor_hand_right_color", 
+                        "init_cam_tensor_hand_left_color",  
+                    ]
+    embodiment_tag : EmbodimentTag | None = None
+    embodiment_tag_mapping: dict[str, int] = Field(
+        description="The projector index of each embodiment tag.",
+        default=EMBODIMENT_TAG_MAPPING,
+    )
+    max_action_dim: int
+    max_state_dim: int
+    state_horizon: int
+    action_horizon: int
+
+    def _apply_vlm_processing(self, images, lang) -> BatchFeature:
+        """
+        Args:
+            batch:
+                video: [T, V, H, W, C]
+        Returns: required input with the format `BatchFeature`
+        """
+
+        # np_images = rearrange(images, "t v h w c -> (t v) h w c")
+        text_content = []
+
+        # handle language
+        text_content.append({"type": "text", "text": lang})
+
+        eagle_images = [Image.fromarray(v) for v in images]
+        eagle_image = [{"type": "image", "image": img} for img in eagle_images]
+
+        eagle_conversation = [
+            {
+                "role": "user",
+                "content": eagle_image + text_content,
+            }
+        ]
+
+        text_list = [
+            self.eagle_processor.apply_chat_template(
+                eagle_conversation, tokenize=False, add_generation_prompt=True
+            )
+        ]
+        image_inputs, video_inputs = self.eagle_processor.process_vision_info(eagle_conversation)
+        # np_image_inputs = []
+        # for image in image_inputs:
+        #     np_image_inputs.append(torch.tensor(np.array(image, dtype=np.uint8) / 255, dtype=torch.float32))
+        eagle_content = {
+            "image_inputs": image_inputs,
+            "video_inputs": video_inputs,
+            "text_list": text_list,
+        }
+        inputs = {}
+        inputs["eagle_content"] = eagle_content
+
+        # inputs = self.eagle_processor(image_inputs, text_list, videos=video_inputs)
+
+        return inputs
+    
+    def set_metadata(self, dataset_metadata: DatasetMetadata):
+        """Set the metadata for the transform."""
+        super().set_metadata(dataset_metadata)
+        self.embodiment_tag = dataset_metadata.embodiment_tag
+    
+    def get_embodiment_tag(self) -> int:
+        """Get the embodiment tag from the data."""
+        assert (
+            self.embodiment_tag is not None
+        ), "Embodiment tag not set. Please call set_metadata first."
+        return self.embodiment_tag_mapping[self.embodiment_tag.value]
+
+    def check_keys_and_batch_size(self, data):
+        grouped_keys = {}
+        for key in data.keys():
+            if "text" in key:
+                modality = "language"
+            else:
+                try:
+                    modality, _ = key.split(".")
+                except:  # noqa: E722
+                    modality = "others"  # will contain the video, state, and action
+            if modality not in grouped_keys:
+                grouped_keys[modality] = []
+            grouped_keys[modality].append(key)
+        # Use video key to determine batch size.
+        video_ndim = data["action"].ndim
+        if video_ndim == 2:  # Interpret as [T, V, H, W, C]
+            is_batched = False
+            batch_size = 1
+        elif video_ndim == 3:  # Interpret as [B, T, V, H, W, C]
+            is_batched = True
+            batch_size = data["action"].shape[0]
+        else:
+            raise ValueError(f"Unsupported action number of dimensions: {video_ndim}")
+
+        # Handle language
+        if "language" in grouped_keys:
+            language_keys = grouped_keys["language"]
+            assert len(language_keys) == 1, f"{language_keys=}"
+            self._language_key = language_keys[0]
+        return is_batched, batch_size
+    
+    def _prepare_action(self, data: dict):
+        """
+        Pad to max_action_dim, return masks.
+        """
+        if "action" not in data:
+            actions = np.zeros((self.action_horizon, self.max_action_dim))
+            actions_mask = np.zeros((self.action_horizon, self.max_action_dim), dtype=bool)
+            n_action_tokens = self.action_horizon
+            return actions, actions_mask, n_action_tokens
+
+        actions = data["action"]
+        assert actions.shape[0] == self.action_horizon, f"{actions.shape=}, {self.action_horizon=}"
+
+        n_action_tokens = actions.shape[0]  # T
+        n_action_dims = actions.shape[1]
+
+        assert (
+            n_action_dims <= self.max_action_dim
+        ), f"Action dim {n_action_dims} exceeds max allowed {self.max_action_dim}."
+
+        # Pad the channel dimension
+        actions = np.pad(actions, ((0, 0), (0, self.max_action_dim - n_action_dims)), "constant")
+
+        # Create mask: [T, max_action_dim]
+        actions_mask = np.zeros((n_action_tokens, self.max_action_dim), dtype=bool)
+        actions_mask[:, :n_action_dims] = True
+
+        return actions, actions_mask, n_action_tokens
+    
+    def _prepare_state(self, data: dict):
+        """
+        Gathers final state from data['state'], then pads to max_state_dim.
+        Return (state, state_mask, n_state_tokens).
+        """
+        if "state" not in data:
+            state = np.zeros((self.state_horizon, self.max_state_dim))
+            state_mask = np.zeros((self.state_horizon, self.max_state_dim), dtype=bool)
+            n_state_tokens = self.state_horizon
+            return state, state_mask, n_state_tokens
+
+        state = data["state"]
+        assert state.shape[0] == self.state_horizon, f"{state.shape=}, {self.state_horizon=}"
+
+        n_state_dims = state.shape[-1]
+
+        # Instead of asserting, just take the first max_state_dim dimensions if needed
+        if n_state_dims > self.max_state_dim:
+            state = state[:, : self.max_state_dim]
+            n_state_dims = self.max_state_dim
+        else:
+            # Pad up to max_state_dim if smaller
+            state = np.pad(state, ((0, 0), (0, self.max_state_dim - n_state_dims)), "constant")
+
+        # Create mask for real state dims
+        state_mask = np.zeros_like(state).astype(bool)
+        state_mask[:, :n_state_dims] = True
+
+        # We only have 1 "proprio" token to represent the entire state
+        n_state_tokens = state.shape[0]
+        return state, state_mask, n_state_tokens
+    
+    def apply_single(self, data: dict) -> dict:
+        transformed_data = {}
+
+        # 1) Prepare video and language with vlm processing.
+        vlm_outputs = self._apply_vlm_processing(data['videos'], data['text'])
+
+        # 2) Prepare states 
+        state, state_mask, _ = self._prepare_state(data)
+        transformed_data["state"] = state
+        transformed_data["state_mask"] = state_mask
+
+        if self.training:
+            # 3) Prepare actions
+            transformed_data["segmentation_target"] = np.zeros((2,))
+            transformed_data["segmentation_target_mask"] = np.zeros((1,))
+            transformed_data["has_real_action"] = np.ones((), dtype=bool)
+            actions, actions_mask, _ = self._prepare_action(data)
+            transformed_data["action"] = actions
+            transformed_data["action_mask"] = actions_mask
+
+        for k, v in vlm_outputs.items():
+            assert k not in transformed_data, f"Key {k} already exists in transformed_data."
+            transformed_data[k] = v
+
+        self.embodiment_tag = EmbodimentTag("agibot_genie1")
+        transformed_data["embodiment_id"] = self.embodiment_tag_mapping[self.embodiment_tag.value]
+
+        if self.training:
+            action_and_mask_keys = ["action", "action_mask"]
+            assert all(
+                transformed_data[key].shape == transformed_data["action"].shape
+                for key in action_and_mask_keys
+            ), f"Shape mismatch: {[(key, transformed_data[key].shape) for key in action_and_mask_keys]}"
+
+        return transformed_data
+
+    def apply_batch(self, data: dict, batch_size: int) -> dict:
+        # Split on batch dimension.
+        data_split = [tree.map_structure(lambda x: x[i], data) for i in range(batch_size)]
+        # Process each element.
+        data_split_processed = [self.apply_single(elem) for elem in data_split]
+        return collate(data_split_processed, self.eagle_processor)
+        
+    def unapply(self, data: dict) -> dict:
+        # Leave as is so that ConcatTransform can split the values
+        return data
+
+    def apply(self, data: dict) -> dict:
+        is_batched, batch_size = self.check_keys_and_batch_size(data)
+        if is_batched:
+            return self.apply_batch(data, batch_size)
+        else:
+            return collate([self.apply_single(data)], self.eagle_processor)
+
+    def __call__(self, data: dict) -> dict:
+        return self.apply(data)
 
 
 class DefaultDataCollator(DataCollatorMixin):
@@ -125,8 +430,6 @@ class GR00TTransform(InvertibleModalityTransform):
 
     max_length: int = 512
     embodiment_tag: EmbodimentTag | None = None
-    use_future: bool = False
-    use_asyn: bool = False
 
     def set_metadata(self, dataset_metadata: DatasetMetadata):
         """Set the metadata for the transform."""
@@ -250,28 +553,18 @@ class GR00TTransform(InvertibleModalityTransform):
             n_state_tokens = self.state_horizon
             return state, state_mask, n_state_tokens
 
-        state = data["state"][:self.state_horizon, :]
-        if self.use_future:
-            future_state = data["state"][self.state_horizon:, :]
-        else:
-            future_state = None
-        # assert state.shape[0] == self.state_horizon, f"{state.shape=}, {self.state_horizon=}"
+        state = data["state"]
+        assert state.shape[0] == self.state_horizon, f"{state.shape=}, {self.state_horizon=}"
 
         n_state_dims = state.shape[-1]
 
         # Instead of asserting, just take the first max_state_dim dimensions if needed
         if n_state_dims > self.max_state_dim:
             state = state[:, : self.max_state_dim]
-            if self.use_future:
-                # If we have future state, we need to truncate it as well
-                future_state = future_state[:, : self.max_state_dim]
             n_state_dims = self.max_state_dim
         else:
             # Pad up to max_state_dim if smaller
             state = np.pad(state, ((0, 0), (0, self.max_state_dim - n_state_dims)), "constant")
-            if self.use_future:
-                # Pad future state as well
-                future_state = np.pad(future_state, ((0, 0), (0, self.max_state_dim - n_state_dims)), "constant")
 
         # Create mask for real state dims
         state_mask = np.zeros_like(state).astype(bool)
@@ -279,8 +572,7 @@ class GR00TTransform(InvertibleModalityTransform):
 
         # We only have 1 "proprio" token to represent the entire state
         n_state_tokens = state.shape[0]
-
-        return state, state_mask, n_state_tokens, future_state
+        return state, state_mask, n_state_tokens
 
     def _prepare_action(self, data: dict):
         """
@@ -292,12 +584,8 @@ class GR00TTransform(InvertibleModalityTransform):
             n_action_tokens = self.action_horizon
             return actions, actions_mask, n_action_tokens
 
-        actions = data["action"][:self.action_horizon, :]
-        if self.use_future:
-            future_actions = data["action"][self.action_horizon:, :]
-        else:
-            future_actions = None
-        # assert actions.shape[0] == self.action_horizon, f"{actions.shape=}, {self.action_horizon=}"
+        actions = data["action"]
+        assert actions.shape[0] == self.action_horizon, f"{actions.shape=}, {self.action_horizon=}"
 
         n_action_tokens = actions.shape[0]  # T
         n_action_dims = actions.shape[1]
@@ -308,15 +596,12 @@ class GR00TTransform(InvertibleModalityTransform):
 
         # Pad the channel dimension
         actions = np.pad(actions, ((0, 0), (0, self.max_action_dim - n_action_dims)), "constant")
-        if self.use_future:
-            # Pad the future actions
-            future_actions = np.pad(future_actions, ((0, 0), (0, self.max_action_dim - n_action_dims)), "constant")
 
         # Create mask: [T, max_action_dim]
         actions_mask = np.zeros((n_action_tokens, self.max_action_dim), dtype=bool)
         actions_mask[:, :n_action_dims] = True
 
-        return actions, actions_mask, n_action_tokens, future_actions
+        return actions, actions_mask, n_action_tokens
 
     def apply_single(self, data: dict) -> dict:
         transformed_data = {}
@@ -329,7 +614,7 @@ class GR00TTransform(InvertibleModalityTransform):
         vlm_outputs = self._apply_vlm_processing(batch_data)
 
         # 2) Prepare state
-        state, state_mask, _, future_state = self._prepare_state(data)
+        state, state_mask, _ = self._prepare_state(data)
         transformed_data["state"] = state
         transformed_data["state_mask"] = state_mask
 
@@ -338,12 +623,9 @@ class GR00TTransform(InvertibleModalityTransform):
             transformed_data["segmentation_target"] = np.zeros((2,))
             transformed_data["segmentation_target_mask"] = np.zeros((1,))
             transformed_data["has_real_action"] = np.ones((), dtype=bool)
-            actions, actions_mask, _, future_actions = self._prepare_action(data)
+            actions, actions_mask, _ = self._prepare_action(data)
             transformed_data["action"] = actions
             transformed_data["action_mask"] = actions_mask
-            if self.use_future:
-                transformed_data["future_state"] = future_state
-                transformed_data['future_action'] = future_actions
 
         for k, v in vlm_outputs.items():
             assert k not in transformed_data, f"Key {k} already exists in transformed_data."

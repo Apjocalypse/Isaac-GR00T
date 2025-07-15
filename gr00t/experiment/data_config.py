@@ -26,7 +26,7 @@ from gr00t.data.transform.video import (
     VideoToNumpy,
     VideoToTensor,
 )
-from gr00t.model.transforms import GR00TTransform
+from gr00t.model.transforms import GR00TTransform, GenieTransform
 
 
 class BaseDataConfig(ABC):
@@ -834,52 +834,52 @@ class AgibotGenie1DataConfig:
 
     def transform(self):
         transforms = [
-            # video transforms
-            VideoToTensor(apply_to=self.video_keys),
-            VideoCrop(apply_to=self.video_keys, scale=0.95),
-            VideoResize(apply_to=self.video_keys, height=224, width=224, interpolation="linear"),
-            VideoColorJitter(
-                apply_to=self.video_keys,
-                brightness=0.3,
-                contrast=0.4,
-                saturation=0.5,
-                hue=0.08,
-            ),
-            VideoToNumpy(apply_to=self.video_keys),
-            # state transforms
-            StateActionToTensor(apply_to=self.state_keys),
-            StateActionTransform(
-                apply_to=self.state_keys,
-                normalization_modes={
-                    "state.left_arm_joint_position": "min_max",
-                    "state.right_arm_joint_position": "min_max",
-                    "state.left_effector_position": "min_max",
-                    "state.right_effector_position": "min_max",
-                    "state.head_position": "min_max",
-                    "state.waist_position": "min_max",
-                },
-            ),
-            # action transforms
-            StateActionToTensor(apply_to=self.action_keys),
-            StateActionTransform(
-                apply_to=self.action_keys,
-                normalization_modes={
-                    "action.left_arm_joint_position": "min_max",
-                    "action.right_arm_joint_position": "min_max",
-                    "action.left_effector_position": "min_max",
-                    "action.right_effector_position": "min_max",
-                    "action.head_position": "min_max",
-                    "action.waist_position": "min_max",
-                    "action.robot_velocity": "min_max",
-                },
-            ),
-            # concat transforms
-            ConcatTransform(
-                video_concat_order=self.video_keys,
-                state_concat_order=self.state_keys,
-                action_concat_order=self.action_keys,
-            ),
-            GR00TTransform(
+            # # video transforms
+            # VideoToTensor(apply_to=self.video_keys),
+            # VideoCrop(apply_to=self.video_keys, scale=0.95),
+            # VideoResize(apply_to=self.video_keys, height=224, width=224, interpolation="linear"),
+            # VideoColorJitter(
+            #     apply_to=self.video_keys,
+            #     brightness=0.3,
+            #     contrast=0.4,
+            #     saturation=0.5,
+            #     hue=0.08,
+            # ),
+            # VideoToNumpy(apply_to=self.video_keys),
+            # # state transforms
+            # StateActionToTensor(apply_to=self.state_keys),
+            # StateActionTransform(
+            #     apply_to=self.state_keys,
+            #     normalization_modes={
+            #         "state.left_arm_joint_position": "min_max",
+            #         "state.right_arm_joint_position": "min_max",
+            #         "state.left_effector_position": "min_max",
+            #         "state.right_effector_position": "min_max",
+            #         "state.head_position": "min_max",
+            #         "state.waist_position": "min_max",
+            #     },
+            # ),
+            # # action transforms
+            # StateActionToTensor(apply_to=self.action_keys),
+            # StateActionTransform(
+            #     apply_to=self.action_keys,
+            #     normalization_modes={
+            #         "action.left_arm_joint_position": "min_max",
+            #         "action.right_arm_joint_position": "min_max",
+            #         "action.left_effector_position": "min_max",
+            #         "action.right_effector_position": "min_max",
+            #         "action.head_position": "min_max",
+            #         "action.waist_position": "min_max",
+            #         "action.robot_velocity": "min_max",
+            #     },
+            # ),
+            # # concat transforms
+            # ConcatTransform(
+            #     video_concat_order=self.video_keys,
+            #     state_concat_order=self.state_keys,
+            #     action_concat_order=self.action_keys,
+            # ),
+            GenieTransform(
                 state_horizon=len(self.observation_indices),
                 action_horizon=len(self.action_indices),
                 max_state_dim=64,

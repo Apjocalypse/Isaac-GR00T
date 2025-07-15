@@ -95,6 +95,8 @@ class EagleBackbone(nn.Module):
                 self.eagle_model.vision_model.eval()
 
     def prepare_input(self, batch: dict) -> BatchFeature:
+        B, N, C, H, W = batch['eagle_pixel_values'].shape
+        batch['eagle_pixel_values'] = batch['eagle_pixel_values'].reshape(B * N, C, H, W)
         return BatchFeature(data=batch)
 
     def forward_eagle(self, vl_input: BatchFeature) -> BatchFeature:

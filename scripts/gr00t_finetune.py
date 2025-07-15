@@ -136,7 +136,7 @@ def main(config: ArgsConfig):
     # 1.1 modality configs and transforms
     data_config_cls = DATA_CONFIG_MAP[config.data_config]
     modality_configs = data_config_cls.modality_config()
-    transforms = data_config_cls.transform(use_future = config.use_future, use_asyn = config.use_asyn)
+    transforms = data_config_cls.transform()
 
     # 1.2 data loader: we will use either single dataset or mixture dataset
     if len(config.dataset_path) == 1:
@@ -271,7 +271,7 @@ if __name__ == "__main__":
 
     if config.num_gpus == 1:
         # Single GPU mode - set CUDA_VISIBLE_DEVICES=0
-        # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
         # Run the script normally
         main(config)
     else:
@@ -280,16 +280,11 @@ if __name__ == "__main__":
         else:
             # Multi-GPU mode - use torchrun
             script_path = Path(__file__).absolute()
-
-            # # Remove any existing CUDA_VISIBLE_DEVICES from environment
-            # if "CUDA_VISIBLE_DEVICES" in os.environ:
-            #     del os.environ["CUDA_VISIBLE_DEVICES"]
+            # Remove any existing CUDA_VISIBLE_DEVICES from environment
+            if "CUDA_VISIBLE_DEVICES" in os.environ:
+                del os.environ["CUDA_VISIBLE_DEVICES"]
 
             # Use subprocess.run instead of os.system
-            try:
-                print(f'os.environ["CUDA_VISIBLE_DEVICES"]:{os.environ["CUDA_VISIBLE_DEVICES"]}')
-            except:
-                pass
             cmd = [
                 "torchrun",
                 "--standalone",

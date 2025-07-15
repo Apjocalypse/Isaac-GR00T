@@ -96,6 +96,7 @@ def main(args: ArgsConfig):
             modality_config=modality_config,
             modality_transform=modality_transform,
             embodiment_tag=args.embodiment_tag,
+            denoising_steps=args.denoising_steps,
             device="cuda" if torch.cuda.is_available() else "cpu",
         )
     else:

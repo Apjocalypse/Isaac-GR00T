@@ -85,7 +85,6 @@ class GR00T_N1_5(PreTrainedModel):
         self.action_horizon = config.action_horizon
         self.action_dim = config.action_dim
         self.compute_dtype = config.compute_dtype
-        self.backbone_outputs = None
 
     def validate_inputs(self, inputs):
         # NOTE -- this should be handled internally by the model
@@ -172,18 +171,10 @@ class GR00T_N1_5(PreTrainedModel):
     def get_action(
         self,
         inputs: dict,
-        use_asyn: bool = False,
-        time_step: int = 0,
     ) -> BatchFeature:
         backbone_inputs, action_inputs = self.prepare_input(inputs)
         # Because the behavior of backbones remains the same for training and inference, we can use `forward` for backbones.
-        if use_asyn: 
-            if time_step == 0:
-                self.backbone_outputs = self.backbone(backbone_inputs)
-            assert self.backbone_outputs is not None, "Backbone outputs should not be None"
-            backbone_outputs = self.backbone_outputs
-        else:
-            backbone_outputs = self.backbone(backbone_inputs)
+        backbone_outputs = self.backbone(backbone_inputs)
         action_head_outputs = self.action_head.get_action(backbone_outputs, action_inputs)
         self.validate_data(action_head_outputs, backbone_outputs, is_training=False)
         return action_head_outputs
@@ -194,12 +185,16 @@ class GR00T_N1_5(PreTrainedModel):
         action_inputs = self.action_head.prepare_input(inputs)
 
         def to_device_with_maybe_dtype(x):
-            # Only cast to self.compute_dtype if the tensor is floating
-            if torch.is_floating_point(x):
-                return x.to(self.device, dtype=self.action_head.dtype)
+            if torch.is_tensor(x):
+                # Only cast to self.compute_dtype if the tensor is floating
+                if torch.is_floating_point(x):
+                    return x.to(self.device, dtype=self.action_head.dtype)
+                    # return x.to(self.device, dtype=torch.float32)
+                else:
+                    # Keep original dtype
+                    return x.to(self.device)
             else:
-                # Keep original dtype
-                return x.to(self.device)
+                return x
 
         backbone_inputs = tree.map_structure(to_device_with_maybe_dtype, backbone_inputs)
         action_inputs = tree.map_structure(to_device_with_maybe_dtype, action_inputs)
