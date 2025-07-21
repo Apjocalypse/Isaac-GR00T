@@ -78,7 +78,7 @@ class ArgsConfig:
 
     dataset_name: str = "robot_sim.PickNPlace"
 
-    dataset_root_dir: str = f"/home/anpengju/datasets/Manipulation-SimData/"
+    dataset_root_dir: str = f"path/to/data"
 
     embodiment_tag: Literal[tuple(EMBODIMENT_TAG_MAPPING.keys())] = "gr1"
     """Embodiment tag to use."""
@@ -104,14 +104,15 @@ class ArgsConfig:
 
     action_dim: int = 16
 
-    save_path: str = "/home/anpengju/Isaac-GR00T-challenge/open_loop.png"
+    save_path: str = "path/to/save"
+
+    plot: bool = True
 
 
 def get_policy(args: ArgsConfig):
     data_config = DATA_CONFIG_MAP[args.data_config]
     modality_configs = data_config.modality_config()
     transforms = data_config.transform()
-    args.dataset_root_dir = args.dataset_root_dir + args.dataset_name
     if args.model_path is not None:
         import torch
 
@@ -188,11 +189,12 @@ def get_policy(args: ArgsConfig):
         task_episode_processors_cfg=dataset_args.episode_processors,
         task_dataset_processors_cfg=dataset_args.dataset_processors,
         task_runtime_processors_cfg=dataset_args.runtime_processors,
-        shuffle=True,
-        statistic=True,
+        shuffle=False,
         debug_one_episode=args.debug,
         # debug_one_episode=False,
     )
+
+    
 
     return policy, vla_dataset
 
@@ -257,9 +259,10 @@ if __name__ == "__main__":
         dataset,
         config,
         traj_id=0,
-        steps=100,
+        steps=len(dataset.data),
         action_horizon=16,
         action_dim=config.action_dim,
-        plot=True
+        plot=config.plot
     )
+
     print("MSE loss for trajectory 0:", mse)
