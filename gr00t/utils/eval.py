@@ -175,18 +175,17 @@ def calc_mse_for_single_trajectory_genie(
         state_joints_across_time.append(state)
         gt_action_joints_across_time.append(gt_action)
 
-
         if step % action_horizon == 0:
             print("inferencing at step: ", step)
-            action_chunk = policy.get_action(data_point)['action'][0]
+            action_chunk = policy.get_action(data_point)
             for j in range(action_horizon):
                 # NOTE: concat_pred_action = action[f"action.{modality_keys[0]}"][j]
                 # the np.atleast_1d is to ensure the action is a 1D array, handle where single value is returned
-                concat_pred_action = np.concatenate(
-                    [np.atleast_1d(action_chunk[j][:action_dim])],
-                    axis=0,
-                )
-                pred_action_joints_across_time.append(concat_pred_action)
+                # concat_pred_action = np.concatenate(
+                #     [np.atleast_1d(action_chunk[j][:action_dim])],
+                #     axis=0,
+                # )
+                pred_action_joints_across_time.append(action_chunk[j][:action_dim])
 
         # import ipdb;ipdb.set_trace()
         # if cfg.with_proprio:

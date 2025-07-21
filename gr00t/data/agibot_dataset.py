@@ -441,15 +441,34 @@ class A2dDataset(BaseDataset):
         data['action'], _ = self.ActionSpacePadder.get_action(raw_target["action_target"], chunk_size=16)
         data['state'], _ = self.ActionSpacePadder.get_action(raw_target["agent_state"], chunk_size=1)
 
-        data['text'] = [raw_target['job_description']]
+        data['text'] = [raw_target['final_prompt']]
 
         data['videos'] = raw_target['videos']
 
         return data
 
+    def get_multi_step_data(self, idxs):
+        data = {}
+
+        for idx in idxs:
+            raw_target = super().__getitem__(idx)
+            action, _ = self.ActionSpacePadder.get_action(raw_target["action_target"], chunk_size=16)
+            state, _ = self.ActionSpacePadder.get_action(raw_target["agent_state"], chunk_size=1)
+
+            data['action'].append(action)
+            data['state'].append(state)
+            data['text'].append(raw_target['final_prompt'])
+            data['videos'].append(raw_target['videos'])
+        
+        return data
+
     def __getitem__(self, idx):
 
         return self.transforms(self.get_step_data(idx))
+
+    def __getitems__(self, idxs):
+
+        return [self.transforms(self.get_step_data(idx)) for idx in idxs]
 
 class LAMStage1Dataset(BaseDataset):
     def __init__(self, is_train=True, image_size=448, pad2square=False, normalize_type="imagenet", **kwargs):
@@ -534,3 +553,249 @@ def setup_distributed():
     torch.cuda.set_device(local_rank)
 
     return local_rank, world_size
+
+# 拿去细细揣摩与学习， 对应的train和eval file在
+# /robot/embodied-perception-data/user/yk/data/AgiBotWorld-Alpha/ann_file
+
+import numpy as np
+import tempfile
+import warnings
+import os
+import cv2
+import pickle
+from collections import defaultdict
+
+import h5py
+import pickle
+import torch
+from torch.utils.data import Dataset
+import torch.nn.functional as F
+
+# from lerobot.common.datasets.video_utils import decode_video_frames_torchvision
+
+class AgiMeta:
+    def __init__(self, tasks, total_frames):
+        self.tasks = tasks
+        self.total_frames = total_frames
+        self.info = None
+
+
+class AgiDataset(Dataset):
+    def __init__(
+        self,
+        dataset_name="agi",
+        root_dir=None,
+        ann_file=None,
+        is_train=True,
+        max_sample=-1,
+        union_net_input_setting=None,
+        vis_cfg=None,
+    ):
+        super().__init__()
+
+        self.root_dir = root_dir
+        self.max_sample = max_sample
+        self.dataset_name = dataset_name
+        self.repo_id = dataset_name
+
+        self.img_size = union_net_input_setting["img_size"]
+        self.union_net_input_setting = union_net_input_setting
+
+        self.obs_horizon = union_net_input_setting["n_obs_steps"]
+        self.pred_horizon = union_net_input_setting["chunk_size"]
+        self.vis_cfg = vis_cfg
+
+        self.tolerance_s=1e-4
+
+        self.data_list = self.load_anns(ann_file)
+        self.meta = AgiMeta(tasks=self.tasks, total_frames=self.frame_num)
+
+        print(" >>>>>>>>>>> data_list: ", len(self.data_list))
+        self.flag = np.zeros(len(self.data_list), dtype=np.uint8)
+
+    def load_anns(self, ann_file):
+        with open(ann_file, "rb") as f:
+            annos = pickle.load(f)
+
+        self.annos = annos
+
+        self.tasks = {}
+        self.num_episodes = 0
+        self.frame_num = 0
+
+        data_list = []
+        for task_id, task_info in annos.items():
+            for episode_id, episode_info in task_info.items():
+                self.num_episodes += 1
+                meta_info = episode_info["meta_info"]
+                frame_infos = episode_info["frame_infos"]
+
+                task = meta_info["task"]
+                self.tasks[task_id] = task
+                self.frame_num += len(frame_infos)
+
+                for frame_i, frame_info in enumerate(frame_infos):
+                    info = {
+                        "task_id": task_id,
+                        "episode_id": episode_id,
+                        "frame_idx_in_episode": frame_i,
+                    }
+
+                    # Remove the last frame to ensure that each subsequent frame contains at least one action.
+                    if frame_i == len(frame_infos) - 1:
+                        continue
+
+                    data_list.append(info)
+
+        data_list = np.array(
+            [(d["task_id"], d["episode_id"], d["frame_idx_in_episode"]) for d in data_list],
+            dtype=np.int32,
+        )
+
+        if self.max_sample != -1:
+            data_list = data_list[:self.max_sample]
+
+        return data_list
+
+    def __len__(self):
+        return len(self.data_list)
+
+    def get_state(self, proprio_infos, frame_idx):
+        # state_curr_value = np.array(proprio_infos["state/joint/current_value"])
+        joint = np.array(proprio_infos["state/joint/position"])[frame_idx]           # [14]， left7、right7
+
+        effector = np.array(proprio_infos["state/effector/position"])[frame_idx] / 1000     # gripper: [2], dexhand: [12], mm -> m
+        end_orientation = np.array(proprio_infos["state/end/orientation"])[frame_idx]      # [2, 4], "left_xyzw", "right_xyzw"
+        end_position = np.array(proprio_infos["state/end/position"])[frame_idx]     # [2, 3], "left_xyz", "right_xyz"
+
+        head = np.array(proprio_infos["state/head/position"])[frame_idx]             # [2]
+        waist = np.array(proprio_infos["state/waist/position"])[frame_idx]           # [2]
+
+        left_state = np.concatenate((joint[:7], effector[:(len(effector)//2)]))
+        right_state = np.concatenate((joint[7:], effector[(len(effector)//2):]))
+        state = np.concatenate((left_state, right_state, head, waist)).astype(np.float32)
+
+        return state
+
+    def get_action(self, proprio_infos, frame_idx, frame_num):
+        end_frame_idx = min(frame_idx+self.pred_horizon+1, frame_num)     # use next frame action(because curr action == state)
+        joint = np.array(proprio_infos["action/joint/position"])[frame_idx: end_frame_idx]           # [14]， left7、right7
+
+        # gripper: [2], dexhand: [12], 0 for full open and 1 for full close, diff state effector
+        effector = np.array(proprio_infos["action/effector/position"])[frame_idx: end_frame_idx]
+        end_orientation = np.array(proprio_infos["action/end/orientation"])[frame_idx: end_frame_idx]      # [2, 4], "left_xyzw", "right_xyzw"
+        end_position = np.array(proprio_infos["action/end/position"])[frame_idx: end_frame_idx]     # [2, 3], "left_xyz", "right_xyz"
+
+        head = np.array(proprio_infos["action/head/position"])[frame_idx: end_frame_idx]             # [2]
+        waist = np.array(proprio_infos["action/waist/position"])[frame_idx: end_frame_idx]           # [2]
+
+        robot_velocity = np.array(proprio_infos["action/robot/velocity"])[frame_idx: end_frame_idx]     # [2], vx,vy
+
+        # action = np.concatenate((joint, effector, head, waist), axis=1).astype(np.float32)      # [pred_horizon+1, action_dim]
+
+        left_action = np.concatenate((joint[:, :7], effector[:, :(len(effector)//2)]), axis=1)
+        right_action = np.concatenate((joint[:, 7:], effector[:, (len(effector)//2):]), axis=1)
+        action = np.concatenate((left_action, right_action, head, waist), axis=1).astype(np.float32)
+        action = action[1:]
+
+        action_is_pad = np.zeros(self.pred_horizon).astype(bool)
+        if action.shape[0] < self.pred_horizon:
+            pad_length = self.pred_horizon-action.shape[0]
+            action = np.concatenate((action, np.zeros((pad_length, action.shape[1]))), axis=0)
+            action_is_pad[-pad_length:] = True
+
+        return action, action_is_pad
+
+    def get_img(self, observation_dir, timestamp):
+        top_video_path = os.path.join(observation_dir, "videos", "head_color.mp4")
+        left_wrist_video_path = os.path.join(observation_dir, "videos", "hand_left_color.mp4")
+        right_wrist_video_path = os.path.join(observation_dir, "videos", "hand_right_color.mp4")
+
+        cam_infos = {
+            "head_cam": top_video_path,
+            "left_wrist_cam": left_wrist_video_path,
+            "right_wrist_cam": right_wrist_video_path
+        }
+
+        item = {}
+        for cam_name in cam_infos:
+            video_path = cam_infos[cam_name]
+            query_ts = [timestamp]
+
+            if not os.path.exists(video_path):
+                frames = torch.zeros((1, 3, 480, 640))      # task 475 loss left_wrist_cam & right_wrist_cam
+            else:
+                frames = decode_video_frames_torchvision(
+                    video_path, query_ts, self.tolerance_s, "pyav"
+                )
+            item[cam_name] = frames.squeeze(0)      # tensor, 0-1
+
+        return item
+
+    def debug_vis(self, batch, frame_info):
+        task_id, episode_id, frame_idx_in_episode = frame_info["task_id"], frame_info["episode_id"], frame_info["frame_idx_in_episode"]
+        head_cam = batch["head_cam"].permute(1, 2, 0).numpy() * 255        # [3, h, w]
+        left_wrist_cam = batch["left_wrist_cam"].permute(1, 2, 0).numpy() * 255
+        right_wrist_cam = batch["right_wrist_cam"].permute(1, 2, 0).numpy() * 255
+
+        head_cam = head_cam.astype(np.uint8)
+        left_wrist_cam = left_wrist_cam.astype(np.uint8)
+        right_wrist_cam = right_wrist_cam.astype(np.uint8)
+
+        state = batch["observation.state"].tolist()
+        action = batch["action"][0].tolist()
+
+        state = ['{0:.2f}'.format(x) for x in state]
+        action = ['{0:.2f}'.format(x) for x in action]
+
+        h, w = head_cam.shape[:2]
+        head_cam = cv2.resize(head_cam, (h*3, w*3))
+
+        text = "state: {}".format(state)
+        cv2.putText(head_cam, text, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+
+        text = "action: {}".format(action)
+        cv2.putText(head_cam, text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+
+        save_path = os.path.join(self.vis_cfg["debug_dir"],  str(task_id) + "_" + str(episode_id) + "_" + str(frame_idx_in_episode).zfill(6) + ".jpg")
+        print("save_path: ", save_path)
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        cv2.imwrite(save_path, head_cam)
+
+    def __getitem__(self, idx):
+        task_id, episode_id, frame_idx_in_episode = self.data_list[idx]
+
+        meta_info = self.annos[str(task_id)][str(episode_id)]["meta_info"]
+        frame_info = self.annos[str(task_id)][str(episode_id)]["frame_infos"][frame_idx_in_episode]
+
+        task_instruction = meta_info["task"]
+        frame_num = meta_info["frame_num"]
+        proprio_file = os.path.join(self.root_dir, meta_info["proprio_dir"], "proprio_stats.h5")
+        observation_dir = os.path.join(self.root_dir, meta_info["observation_dir"])
+        cam_param_dir = meta_info["cam_param_dir"]
+
+        proprio_infos = h5py.File(proprio_file)
+
+        state = self.get_state(proprio_infos, frame_idx_in_episode)
+        action, action_is_pad = self.get_action(proprio_infos, frame_idx_in_episode, frame_num=frame_num)
+        cam_imgs = self.get_img(observation_dir, timestamp=frame_info["timestamp"])
+
+        batch = {}
+        batch.update(cam_imgs)
+        batch["action"] = action
+        batch["action_is_pad"] = action_is_pad
+        batch["observation.state"] = state
+        batch["timestamp"] = frame_info["timestamp"]
+        batch["frame_index"] = frame_idx_in_episode
+        batch["task"] = task_instruction
+        batch["dataset_name"] = self.dataset_name
+        batch["ori_camera_names"] = self.ori_data_info["image_keys"]
+        # batch["meta_info"] = dataset.meta.info
+
+        if self.vis_cfg is not None and self.vis_cfg.get("debug_vis", False):
+            self.debug_vis(batch, {"task_id": task_id, "episode_id": episode_id, "frame_idx_in_episode": frame_idx_in_episode})
+
+        batch["task"] = batch["task"]
+        batch["dataset_name"] = batch["dataset_name"]
+
+        return batch

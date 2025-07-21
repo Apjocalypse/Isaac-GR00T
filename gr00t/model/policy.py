@@ -30,7 +30,6 @@ from gr00t.data.transform.base import ComposedModalityTransform
 from gr00t.model.gr00t_n1 import GR00T_N1_5
 
 import os
-import rclpy
 import threading
 
 
@@ -106,6 +105,7 @@ class Gr00tPolicy(BasePolicy):
         self.model_path = Path(model_path)
         self.device = device
         if task_name is not None:
+            import rclpy
             from base_utils.ros_utils import SimROSNode
             self.task_name = " ".join(task_name.split('_')[1:])
             rclpy.init()
@@ -200,17 +200,17 @@ class Gr00tPolicy(BasePolicy):
         """
         # let the get_action handles both batch and single input
         is_batch = self._check_state_is_batched(observations)
-        # if not is_batch:
-        #     observations = unsqueeze_dict_values(observations)
+        if not is_batch:
+            observations = unsqueeze_dict_values(observations)
         # Apply transforms
         normalized_input = self.apply_transforms(observations)
 
         normalized_action = self._get_action_from_normalized_input(normalized_input)
         unnormalized_action = self._get_unnormalized_action(normalized_action)
 
-        # if not is_batch:
-        #     unnormalized_action = squeeze_dict_values(unnormalized_action)
-        return unnormalized_action
+        if not is_batch:
+            unnormalized_action = squeeze_dict_values(unnormalized_action)
+        return unnormalized_action['action']
     
     def act(self, observation: Dict[str, Any], step_num: int):
         # while self.sim_ros_node.buffer_empty():
@@ -367,14 +367,6 @@ class Gr00tPolicy(BasePolicy):
             0,
         ]
         return target_position
-
-    def shutdown(self):
-        if rclpy.ok():
-            self.sim_ros_node.destroy_node()
-            rclpy.shutdown()
-
-        if self.spin_thread.is_alive():
-            self.spin_thread.join(timeout=5)
 #######################################################################################################
 
 

@@ -193,8 +193,6 @@ class GR00T_N1_5(PreTrainedModel):
                 else:
                     # Keep original dtype
                     return x.to(self.device)
-            else:
-                return x
 
         backbone_inputs = tree.map_structure(to_device_with_maybe_dtype, backbone_inputs)
         action_inputs = tree.map_structure(to_device_with_maybe_dtype, action_inputs)

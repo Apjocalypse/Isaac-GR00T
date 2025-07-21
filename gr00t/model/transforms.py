@@ -75,26 +75,7 @@ def collate(features: List[dict], eagle_processor) -> dict:
             for k, v in eagle_inputs.items():
                 k = "eagle_" + k
                 batch[k] = v
-        elif key in ("pixel_values", "image_grid_thw", "attention_mask", "input_ids"):
-            # Concat in existing batch dimension.
-            batch[key] = torch.cat(values)
-        elif key in ('eagle_input_ids', 'eagle_attention_mask'):
-            max_columns = max(arr.shape[1] for arr in values)
-
-            # 填充到相同形状
-            padded_values = [torch.from_numpy(np.pad(arr, ((0, 0), (0, max_columns - arr.shape[1])), mode='constant')) for arr in values]
-
-            # # 打印填充后的数组形状
-            # for i, arr in enumerate(padded_values):
-            #     print(f"填充后的数组 {i}: shape={arr.shape}")
-
-            # 堆叠数组
-            batch[key] = torch.cat(padded_values)
         else:
-            # state, state_mask, action and action_mask.
-            # Stack to form the batch dimension.
-            # for i, arr in enumerate(values):
-            #     print(f"{key} 数组 {i} 的形状: {arr.shape}")
             batch[key] = torch.from_numpy(np.stack(values))
     return batch
 
@@ -382,7 +363,8 @@ class GenieTransform(InvertibleModalityTransform):
         if is_batched:
             return self.apply_batch(data, batch_size)
         else:
-            return collate([self.apply_single(data)], self.eagle_processor)
+            # return collate([self.apply_single(data)], self.eagle_processor, is_batched=is_batched)
+            return self.apply_single(data)
 
     def __call__(self, data: dict) -> dict:
         return self.apply(data)

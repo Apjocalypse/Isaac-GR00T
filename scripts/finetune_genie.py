@@ -38,13 +38,12 @@ class FinetuneConfig:
     output_dir: str = "/home/anpengju/runs/gr00t_challenge"    # CHANGE THIS ACCORDING TO YOUR LOCAL PATH
     per_device_train_batch_size: int = 8     # CHANGE THIS ACCORDING TO YOUR GPU MEMORY
     max_steps: int = 5000                      # CHANGE THIS ACCORDING TO YOUR NEEDS
+    save_steps: int = 1000
     report_to: str = "wandb"    # or tensorboard or none
     dataloader_num_workers: int = 8
     window_size: int = 30
 
     data_config: str = "agibot_genie1"
-
-    device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
     debug: bool = False
 
@@ -151,7 +150,6 @@ def finetune(cfg: FinetuneConfig) -> None:
     # Set the model's compute_dtype to bfloat16
     model.compute_dtype = "bfloat16"
     model.config.compute_dtype = "bfloat16"
-    model.to(cfg.device)
 
     training_args = TrainingArguments(
         output_dir=cfg.output_dir,
@@ -178,7 +176,7 @@ def finetune(cfg: FinetuneConfig) -> None:
         num_train_epochs=300,
         max_steps=cfg.max_steps,
         save_strategy="steps",
-        save_steps=1000,
+        save_steps=cfg.save_steps,
         save_total_limit=8,
         report_to=cfg.report_to,
         seed=42,
@@ -218,49 +216,52 @@ if __name__ == "__main__":
     assert config.num_gpus > 0, "Number of GPUs must be greater than 0"
     print(f"Using {config.num_gpus} GPUs")
 
-    if config.num_gpus == 1:
-        # Single GPU mode - set CUDA_VISIBLE_DEVICES=0
-        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-        # Run the script normally
+    # if config.num_gpus == 1:
+    #     # Single GPU mode - set CUDA_VISIBLE_DEVICES=0
+    #     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+    #     # Run the script normally
+    #     finetune(config)
+    # else:
+
+    if os.environ.get("IS_TORCHRUN", "1") == "0":
         finetune(config)
     else:
-        if os.environ.get("IS_TORCHRUN", "0") == "1":
-            finetune(config)
-        else:
-            # Multi-GPU mode - use torchrun
-            script_path = Path(__file__).absolute()
-            # Remove any existing CUDA_VISIBLE_DEVICES from environment
-            if "CUDA_VISIBLE_DEVICES" in os.environ:
-                del os.environ["CUDA_VISIBLE_DEVICES"]
+        # Multi-GPU mode - use torchrun
+        script_path = Path(__file__).absolute()
+        # Remove any existing CUDA_VISIBLE_DEVICES from environment
+        if "CUDA_VISIBLE_DEVICES" in os.environ:
+            del os.environ["CUDA_VISIBLE_DEVICES"]
 
-            # Use subprocess.run instead of os.system
-            cmd = [     
-                "torchrun",
-                "--standalone",
-                f"--nproc_per_node={config.num_gpus}",
-                "--nnodes=1",  # default to 1 node for now
-                str(script_path),
-            ]
+        # Use subprocess.run instead of os.system
+        cmd = [
+            "torchrun",
+            "--standalone",
+            f"--nproc_per_node={config.num_gpus}",
+            "--nnodes=1",  # default to 1 node for now
+            str(script_path),
+        ]
 
-            # Convert config to command line arguments
-            for key, value in vars(config).items():
-                if isinstance(value, bool):
-                    # For boolean values, use --flag or --no-flag format
-                    if value:
-                        cmd.append(f"--{key.replace('_', '-')}")
-                    else:
-                        cmd.append(f"--no-{key.replace('_', '-')}")
-                else:
-                    # For non-boolean values, use --key value format
+        # Convert config to command line arguments
+        for key, value in vars(config).items():
+            if isinstance(value, bool):
+                # For boolean values, use --flag or --no-flag format
+                if value:
                     cmd.append(f"--{key.replace('_', '-')}")
+                else:
+                    cmd.append(f"--no-{key.replace('_', '-')}")
+            else:
+                # For non-boolean values, use --key value format
+                cmd.append(f"--{key.replace('_', '-')}")
 
-                    # if the value is a list (e.g. dataset_path), we need to add each element in the list
-                    if isinstance(value, list):
-                        for v in value:
-                            cmd.append(str(v))
-                    else:
-                        cmd.append(str(value))
-            print("Running torchrun command: ", cmd)
-            env = os.environ.copy()
-            env["IS_TORCHRUN"] = "1"
-            sys.exit(subprocess.run(cmd, env=env).returncode)
+                # if the value is a list (e.g. dataset_path), we need to add each element in the list
+                if isinstance(value, list):
+                    for v in value:
+                        cmd.append(str(v))
+                else:
+                    cmd.append(str(value))
+        print("Running torchrun command: ", cmd)
+        env = os.environ.copy()
+        env["IS_TORCHRUN"] = "0"
+        print(cmd)
+        print(env)
+        sys.exit(subprocess.run(cmd, env=env).returncode)

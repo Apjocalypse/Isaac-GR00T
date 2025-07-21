@@ -21,11 +21,9 @@ from transformers.feature_extraction_utils import BatchFeature
 
 import gr00t
 
-# DEFAULT_EAGLE_PATH = os.path.join(
-#     os.path.dirname(gr00t.__file__), "model", "backbone", "eagle2_hg_model"
-# )
-
-DEFAULT_EAGLE_PATH = '/root/workspace/main/Isaac-GR00T-challenge/gr00t/model/backbone/eagle2_hg_model'
+DEFAULT_EAGLE_PATH = os.path.join(
+    os.path.dirname(gr00t.__file__), "model", "backbone", "eagle2_hg_model"
+)
 
 
 class EagleBackbone(nn.Module):
@@ -97,8 +95,6 @@ class EagleBackbone(nn.Module):
                 self.eagle_model.vision_model.eval()
 
     def prepare_input(self, batch: dict) -> BatchFeature:
-        B, N, C, H, W = batch['eagle_pixel_values'].shape
-        batch['eagle_pixel_values'] = batch['eagle_pixel_values'].reshape(B * N, C, H, W)
         return BatchFeature(data=batch)
 
     def forward_eagle(self, vl_input: BatchFeature) -> BatchFeature:
@@ -120,6 +116,18 @@ class EagleBackbone(nn.Module):
         self.set_frozen_modules_to_eval_mode()
 
         eagle_embeds, eagle_mask = self.forward_eagle(vl_input)
+
+        # YL (TODO HACK): to resolve DDP issue when tune_visual=True
+        # Ensure all trainable parameters in vision_model are used in the forward pass for DDP compatibility
+        if self.training and self.tune_visual:
+            dummy_term = torch.tensor(
+                0.0, device=eagle_embeds.device, dtype=eagle_embeds.dtype, requires_grad=True
+            )
+            for param in self.eagle_model.vision_model.parameters():
+                if param.requires_grad:
+                    dummy_term = dummy_term + 0.0 * param.sum()
+            eagle_embeds = eagle_embeds + dummy_term
+
         return BatchFeature(
             data={"backbone_features": eagle_embeds, "backbone_attention_mask": eagle_mask}
         )  # [B, T2, hidden_size]
